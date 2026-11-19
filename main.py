@@ -1,27 +1,28 @@
-"""news-image-20261119 entry: write the 19 November 2026 world-news summary
-image to /output/entry.png.
+#!/usr/bin/env python3
+"""Ship the entry image.
 
-The image itself is drawn by build_image.py (Pillow + DejaVu, run at build
-time) and shipped in this repository as news.png; this program copies it to
-the output path. Copying a repository-held image is the simplest entry the
-bounty rules describe, and it is deterministic: two runs write the same
-bytes, with no network.
-
-Run locally:
-    mkdir -p out && MAKEFUN_OUTPUT_DIR=out python3 main.py
+Copies the news.png sitting next to this file into the make.fun output
+directory as entry.png. The output directory comes from the
+MAKEFUN_OUTPUT_DIR environment variable and defaults to /output.
 """
+
+from __future__ import annotations
+
 import os
 import shutil
 from pathlib import Path
 
-HERE = Path(__file__).resolve().parent
-OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
-SOURCE = HERE / "news.png"
-
 
 def main() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(SOURCE, OUTPUT_DIR / "entry.png")
+    here = Path(__file__).resolve().parent
+    source = here / "news.png"
+    if not source.is_file():
+        raise SystemExit(f"missing input image: {source}")
+    out_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / "entry.png"
+    shutil.copyfile(source, target)
+    print(f"copied {source} -> {target} ({target.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":

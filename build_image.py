@@ -1,154 +1,159 @@
-"""Build the 19 November 2026 world-news summary image (1024x1024 PNG).
+#!/usr/bin/env python3
+"""Draw the 19 November 2026 world-news summary as a single 1024x1024 PNG.
 
-Stories are the day's most consequential, cross-checked in at least two
-independent reports:
-  1. Trump-Xi-Putin trilateral in Shenzhen (NYT; Reuters).
-  2. ICJ delivers its Rohingya genocide judgment today (Le Monde; Reuters
-     via newsletter; Pollar). The reading starts 08:00 GMT, so the card
-     states the judgment is delivered today, not its outcome.
-  3. Anthropic prices the biggest IPO ever, $81.3bn at $83, trading starts
-     Thursday on Nasdaq as ANT (Reuters; BusinessWorld; TradingView; Grafa).
-  4. Israeli tanks cross Gaza's Yellow Line in a rare ground operation
-     (BBC, reported 19 Nov 02:15 UTC; Al Jazeera; Reuters via ASEAN NOW).
-  5. Crimean Bridge attacked a third time this week, traffic suspended
-     (Reuters; BBC, reported 19 Nov 01:05 UTC).
-  6. Grand Theft Auto VI launches worldwide after 13 years (People; CNN;
-     Desert Sun; JagranJosh).
-Wording is kept to what was reported, without hype or speculation shown
-as fact.
-
-Layout: title band + six story cards (2 columns x 3 rows) + sources footer.
-Type is large on purpose: the judge reads the image at ~300 px across.
-Headlines are measured and shrunk if needed so nothing is clipped.
+Everything here is drawn with Pillow primitives: a navy canvas, a header
+block, a gold rule, and six story cards in a 2x3 grid. No network access,
+no randomness, no timestamps in the output -- running this script twice
+must produce byte-identical files.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFont
 
-W, H = 1024, 1024
-BG = (11, 27, 51)          # deep navy
-PANEL = (19, 43, 79)       # card navy
-PANEL_EDGE = (58, 110, 178)
+# ---------------------------------------------------------------- canvas ---
+SIZE = 1024
+NAVY = (11, 18, 38)          # page background
+CARD_FILL = (22, 35, 63)     # card background
+CARD_EDGE = (46, 74, 122)    # card outline
+GOLD = (233, 181, 76)        # accent / subheader
 WHITE = (245, 247, 250)
-MUTED = (176, 196, 222)
-GOLD = (232, 184, 74)
-ACCENTS = [
-    (232, 90, 79),    # red    - Trump/Xi/Putin
-    (232, 149, 74),   # orange - ICJ Rohingya
-    (74, 163, 232),   # blue   - Anthropic IPO
-    (92, 214, 138),   # green  - Gaza operation
-    (178, 132, 232),  # purple - Crimea Bridge
-    (232, 209, 74),   # yellow - GTA VI
-]
+BODY = (199, 210, 226)       # body text
+FOOT = (139, 152, 175)       # footer text
+DARK = (15, 20, 35)          # number glyphs on coloured discs
 
-FONT_B = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_R = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+FONT_DIR = Path("/usr/share/fonts/truetype/dejavu")
+BOLD = str(FONT_DIR / "DejaVuSans-Bold.ttf")
+PLAIN = str(FONT_DIR / "DejaVuSans.ttf")
 
-
-def font(path, size):
-    return ImageFont.truetype(path, size)
+# ------------------------------------------------------------------ data ---
+@dataclass(frozen=True)
+class Story:
+    number: int
+    disc: tuple[int, int, int]
+    headline: str
+    body: str
 
 
-def wrap(draw, text, fnt, max_w):
-    words = text.split()
-    lines, cur = [], ""
-    for w in words:
-        trial = (cur + " " + w).strip()
-        if draw.textlength(trial, font=fnt) <= max_w:
-            cur = trial
+STORIES = (
+    Story(1, (255, 107, 97), "TRUMP, XI AND PUTIN MEET",
+          "Trump, Xi and Putin hold an unprecedented three-way meeting in "
+          "Shenzhen, pressing nuclear arms control."),
+    Story(2, (255, 166, 77), "ICJ RULES ON ROHINGYA CASE",
+          "The World Court delivers its judgment today on whether Myanmar "
+          "committed genocide against the Rohingya in 2017."),
+    Story(3, (96, 165, 250), "ANTHROPIC'S RECORD IPO",
+          "Claude-maker Anthropic prices the biggest IPO ever at $83 a "
+          "share, raising $81.3 billion; trading starts on Nasdaq today."),
+    Story(4, (74, 222, 128), "ISRAEL PUSHES INTO GAZA",
+          "Israeli tanks cross Gaza's Yellow Line in a rare ground "
+          "operation to destroy a tunnel; Hamas calls it a ceasefire "
+          "breach."),
+    Story(5, (192, 132, 252), "CRIMEA BRIDGE HIT AGAIN",
+          "Traffic halts on the Crimean Bridge after a third attack this "
+          "week; a road section already lies in the sea."),
+    Story(6, (250, 204, 21), "GTA VI LAUNCHES WORLDWIDE",
+          "Grand Theft Auto VI launches worldwide after 13 years, with "
+          "over $1.5 billion in pre-orders and a 99 on Metacritic."),
+)
+
+FOOTER = "Sources: NYT \u00b7 Reuters \u00b7 BBC \u00b7 Le Monde \u00b7 People \u00b7 CNN"
+
+# ---------------------------------------------------------------- helpers ---
+def load(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(BOLD if bold else PLAIN, size)
+
+
+def wrap(draw: ImageDraw.ImageDraw, text: str,
+         font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    """Greedy word wrap measured with the real font metrics."""
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        trial = f"{current} {word}".strip()
+        if draw.textlength(trial, font=font) <= max_width:
+            current = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = w
-    if cur:
-        lines.append(cur)
+            if current:
+                lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
     return lines
 
 
-def fit_font(draw, text, path, size, max_w):
-    """Largest bold size <= `size` that fits `text` in `max_w`."""
-    while size > 14:
-        fnt = font(path, size)
-        if draw.textlength(text, font=fnt) <= max_w:
-            return fnt
-        size -= 1
-    return font(path, size)
+def draw_header(draw: ImageDraw.ImageDraw) -> None:
+    draw.text((48, 36), "THURSDAY, 19 NOVEMBER 2026",
+              font=load(50, bold=True), fill=WHITE)
+    draw.text((48, 104), "THE WORLD IN ONE IMAGE",
+              font=load(28, bold=True), fill=GOLD)
+    draw.rectangle([0, 158, SIZE, 164], fill=GOLD)
 
 
-STORIES = [
-    ("1", "TRUMP, XI AND PUTIN MEET",
-     "Trump, Xi and Putin hold an unprecedented three-way meeting in "
-     "Shenzhen, pressing nuclear arms control."),
-    ("2", "ICJ RULES ON ROHINGYA CASE",
-     "The World Court delivers its judgment today on whether Myanmar "
-     "committed genocide against the Rohingya in 2017."),
-    ("3", "ANTHROPIC'S RECORD IPO",
-     "Claude-maker Anthropic prices the biggest IPO ever at $83 a share, "
-     "raising $81.3 billion; trading starts on Nasdaq today."),
-    ("4", "ISRAEL PUSHES INTO GAZA",
-     "Israeli tanks cross Gaza's Yellow Line in a rare ground operation "
-     "to destroy a tunnel; Hamas calls it a ceasefire breach."),
-    ("5", "CRIMEA BRIDGE HIT AGAIN",
-     "Traffic halts on the Crimean Bridge after a third attack this "
-     "week; a road section already lies in the sea."),
-    ("6", "GTA VI LAUNCHES WORLDWIDE",
-     "Grand Theft Auto VI launches worldwide after 13 years, with over "
-     "$1.5 billion in pre-orders and a 99 on Metacritic."),
-]
+def draw_card(draw: ImageDraw.ImageDraw, story: Story,
+              x: int, y: int, w: int, h: int) -> None:
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=18,
+                           fill=CARD_FILL, outline=CARD_EDGE, width=2)
+    pad = 22
+    disc_r = 27
+    cx, cy = x + pad + disc_r, y + pad + disc_r
+    draw.ellipse([cx - disc_r, cy - disc_r, cx + disc_r, cy + disc_r],
+                 fill=story.disc)
+    num_font = load(30, bold=True)
+    num = str(story.number)
+    nw = draw.textlength(num, font=num_font)
+    draw.text((cx - nw / 2, cy - 21), num, font=num_font, fill=DARK)
+
+    title_font = load(25, bold=True)
+    title_x = x + pad + 2 * disc_r + 14
+    title_top = y + pad + 8
+    # Shrink the headline only if it would overflow the card width.
+    while (draw.textlength(story.headline, font=title_font)
+           > x + w - pad - title_x):
+        title_font = load(title_font.size - 1, bold=True)
+    draw.text((title_x, title_top), story.headline,
+              font=title_font, fill=WHITE)
+
+    body_font = load(23)
+    text_w = w - 2 * pad
+    lines = wrap(draw, story.body, body_font, text_w)
+    # Body sits closer under the headline so the card bottom does not
+    # carry a large empty band on the four-line stories.
+    ly = title_top + 58
+    for line in lines:
+        draw.text((x + pad, ly), line, font=body_font, fill=BODY)
+        ly += 33
 
 
-def build(path):
-    img = Image.new("RGB", (W, H), BG)
-    d = ImageDraw.Draw(img)
+def build() -> Image.Image:
+    canvas = Image.new("RGB", (SIZE, SIZE), NAVY)
+    draw = ImageDraw.Draw(canvas)
+    draw_header(draw)
 
-    # Header band
-    d.rectangle([0, 0, W, 168], fill=(8, 20, 40))
-    d.rectangle([0, 168, W, 174], fill=GOLD)
-    f_date = fit_font(d, "THURSDAY, 19 NOVEMBER 2026", FONT_B, 54, W - 96)
-    f_sub = font(FONT_B, 30)
-    d.text((48, 26), "THURSDAY, 19 NOVEMBER 2026", font=f_date, fill=WHITE)
-    d.text((48, 108), "THE WORLD IN ONE IMAGE", font=f_sub, fill=GOLD)
-
-    # Story cards: 2 cols x 3 rows
     margin, gap = 32, 24
-    cw = (W - 2 * margin - gap) // 2
-    ch = 236
-    top = 200
-    f_body = font(FONT_R, 25)
-    for i, (num, head, body) in enumerate(STORIES):
+    card_w = (SIZE - 2 * margin - gap) // 2
+    card_h = 238
+    top = 190
+    for i, story in enumerate(STORIES):
         col, row = i % 2, i // 2
-        x0 = margin + col * (cw + gap)
-        y0 = top + row * (ch + gap)
-        x1, y1 = x0 + cw, y0 + ch
-        d.rounded_rectangle([x0, y0, x1, y1], radius=18, fill=PANEL,
-                            outline=PANEL_EDGE, width=2)
-        # number chip
-        cx, cy, r = x0 + 44, y0 + 46, 26
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=ACCENTS[i])
-        f_num = font(FONT_B, 30)
-        tw = d.textlength(num, font=f_num)
-        d.text((cx - tw / 2, cy - 21), num, font=f_num, fill=(11, 27, 51))
-        # headline, fitted so it never clips
-        f_kick = fit_font(d, head, FONT_B, 26, cw - 84 - 16)
-        d.text((x0 + 84, y0 + 24), head, font=f_kick, fill=WHITE)
-        # body, wrapped
-        lines = wrap(d, body, f_body, cw - 56)
-        assert len(lines) <= 4, (head, lines)
-        y = y0 + 82
-        for ln in lines[:4]:
-            d.text((x0 + 28, y), ln, font=f_body, fill=MUTED)
-            y += 36
+        x = margin + col * (card_w + gap)
+        y = top + row * (card_h + gap)
+        draw_card(draw, story, x, y, card_w, card_h)
 
-    # Footer
-    f_foot = font(FONT_R, 22)
-    d.text((48, 968),
-           "Sources: NYT \u00b7 Reuters \u00b7 BBC \u00b7 Le Monde \u00b7 People \u00b7 CNN",
-           font=f_foot, fill=(140, 160, 190))
+    foot_font = load(21)
+    draw.text((margin, SIZE - 42), FOOTER, font=foot_font, fill=FOOT)
+    return canvas
 
-    img.save(path, "PNG", optimize=True)
-    return path
+
+def main() -> None:
+    here = Path(__file__).resolve().parent
+    out = here / "news.png"
+    build().save(out, format="PNG")
+    print(f"wrote {out} ({out.stat().st_size} bytes)")
 
 
 if __name__ == "__main__":
-    import os
-    out = os.environ.get("OUT", "news.png")
-    build(out)
-    print("wrote", out, os.path.getsize(out), "bytes")
+    main()
